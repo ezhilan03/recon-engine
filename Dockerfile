@@ -9,11 +9,13 @@ FROM python:3.11-slim AS builder
 RUN pip install --no-cache-dir uv
 
 WORKDIR /app
-COPY pyproject.toml ./
+COPY pyproject.toml uv.lock ./
 COPY src/ ./src/
 COPY sql/ ./sql/
 
-RUN uv sync --no-dev
+# --frozen: fail the build if uv.lock doesn't match pyproject.toml, instead
+# of silently re-resolving and drifting from what's actually committed.
+RUN uv sync --no-dev --frozen
 
 FROM python:3.11-slim
 

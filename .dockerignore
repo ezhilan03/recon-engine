@@ -5,6 +5,5 @@ __pycache__
 *.pyc
 .git
 .env
-uv.lock
 *.egg-info
 tests
