@@ -1,0 +1,15 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+# Secrets
+.env
+
+# Investigation/proposal cache -- regenerated per dataset, not meant to be versioned
+data/cache/
