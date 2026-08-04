@@ -9,7 +9,7 @@ FROM python:3.11-slim AS builder
 RUN pip install --no-cache-dir uv
 
 WORKDIR /app
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock README.md ./
 COPY src/ ./src/
 COPY sql/ ./sql/
 
