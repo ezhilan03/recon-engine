@@ -139,7 +139,7 @@ resource "aws_instance" "demo" {
     chmod 600 /var/lib/recon/config.json
   SCRIPT
   tags       = { Name = "${var.name}-demo" }
-  depends_on = [aws_route_table_association.demo, aws_iam_role_policy.demo, aws_iam_role_policy_attachment.ssm]
+  depends_on = [aws_route_table_association.demo, aws_iam_role_policy.demo, aws_iam_role_policy_attachment.ssm, aws_budgets_budget.demo]
 }
 output "demo_instance_id" {
   value = var.enable_demo ? aws_instance.demo[0].id : null

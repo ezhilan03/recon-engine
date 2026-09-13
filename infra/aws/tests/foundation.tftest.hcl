@@ -19,6 +19,7 @@ run "bounded_demo" {
   # Mocked apply only: resolves provider-computed ARNs, creates no AWS resources.
   command = apply
   variables {
+    budget_email     = "test@example.com"
     enable_demo      = true
     enable_publisher = true
     demo_ami         = "ami-0123456789abcdef0"
