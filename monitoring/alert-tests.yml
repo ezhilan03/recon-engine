@@ -1,0 +1,42 @@
+rule_files: [alerts.yml]
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: recon_batch_success
+        values: '1 0 0 1 1'
+      - series: recon_batch_last_success_timestamp_seconds
+        values: '0+60x5'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ReconciliationBatchFailed
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Latest reconciliation batch failed
+              description: Inspect status.json error_type; correct the source or configuration, then retry the same run ID.
+      - eval_time: 4m
+        alertname: ReconciliationBatchFailed
+        exp_alerts: []
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: ReconciliationMetricsMissing
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: Reconciliation metrics are unavailable
+  - interval: 1m
+    input_series:
+      - series: recon_batch_success
+        values: '1+0x1510'
+      - series: recon_batch_last_success_timestamp_seconds
+        values: '0+0x1510'
+    alert_rule_test:
+      - eval_time: 1506m
+        alertname: ReconciliationBatchStale
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: No successful daily reconciliation batch for 25 hours

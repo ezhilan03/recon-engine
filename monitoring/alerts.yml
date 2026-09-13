@@ -1,0 +1,25 @@
+groups:
+  - name: reconciliation
+    rules:
+      - alert: ReconciliationBatchFailed
+        expr: recon_batch_success == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Latest reconciliation batch failed
+          description: Inspect status.json error_type; correct the source or configuration, then retry the same run ID.
+      - alert: ReconciliationBatchStale
+        expr: time() - recon_batch_last_success_timestamp_seconds > 90000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: No successful daily reconciliation batch for 25 hours
+      - alert: ReconciliationMetricsMissing
+        expr: absent(recon_batch_success)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Reconciliation metrics are unavailable

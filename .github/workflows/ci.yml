@@ -1,0 +1,82 @@
+name: Reconciliation checks
+
+on:
+  pull_request:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  correctness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: integration-only
+          POSTGRES_DB: recon
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Deterministic allocation regressions
+        run: PYTHONPATH=src python -m unittest tests.test_deterministic_matcher
+      - name: Install locked application dependencies
+        run: |
+          python -m pip install uv==0.11.31
+          uv sync --frozen
+      - name: Human approval pause and resume
+        run: uv run --frozen python -m tests.test_human_approval
+      - name: Database replay, rollback and concurrent allocation tests
+        env:
+          RECON_TEST_DATABASE_URL: postgresql://postgres:integration-only@127.0.0.1:5432/recon
+          RECON_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: uv run --frozen python -m unittest discover -s tests -v
+      - name: Record synthetic baseline
+        run: PYTHONPATH=src python -m recon_engine.matching.evaluate_baseline
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build application image
+        run: docker build -t recon-engine:ci .
+      - name: Run regressions inside image
+        run: >-
+          docker run --rm
+          -v "$PWD/tests:/app/tests:ro"
+          -e PYTHONPATH=/app/src
+          recon-engine:ci python -m unittest tests.test_deterministic_matcher
+
+  infrastructure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.16.1'
+      - run: terraform -chdir=infra/aws fmt -check -recursive
+      - run: terraform -chdir=infra/aws init -backend=false -lockfile=readonly
+      - run: terraform -chdir=infra/aws validate
+      - run: terraform -chdir=infra/aws test
+      - name: Verify failure, stale, missing and recovery alerts
+        run: >-
+          docker run --rm --entrypoint /bin/promtool
+          -v "$PWD/monitoring:/checks:ro" -w /checks
+          prom/prometheus:v3.5.0 test rules alert-tests.yml

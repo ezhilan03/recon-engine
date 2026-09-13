@@ -31,7 +31,7 @@ from recon_engine.graph.nodes import (
 from recon_engine.graph.state import GraphState
 
 
-def build_graph():
+def build_graph(checkpointer=None):
     graph = StateGraph(GraphState)
 
     graph.add_node("classify", classify_rule_based)
@@ -49,9 +49,5 @@ def build_graph():
     graph.add_edge("human_approval", "summarize")
     graph.add_edge("summarize", END)
 
-    # interrupt() requires a checkpointer -- it's how LangGraph persists
-    # state across the pause. InMemorySaver is fine for this single-process
-    # CLI demo; a production deployment would use a Postgres-backed
-    # checkpointer (langgraph-checkpoint-postgres) so an interrupt survives
-    # a process restart, not just a pause within one run.
-    return graph.compile(checkpointer=InMemorySaver())
+    # In-memory is reserved for isolated tests; the operational CLI injects PostgreSQL.
+    return graph.compile(checkpointer=checkpointer if checkpointer is not None else InMemorySaver())

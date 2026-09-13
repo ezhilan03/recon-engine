@@ -7,11 +7,9 @@
 -- exposing it at runtime would let the system "cheat" the way a leaked
 -- test set would. It exists purely for evaluate_baseline.py-style scoring.
 
-DROP TABLE IF EXISTS ground_truth;
-DROP TABLE IF EXISTS network_settlement;
-DROP TABLE IF EXISTS internal_ledger;
+-- Additive bootstrap: importing data never drops existing records.
 
-CREATE TABLE internal_ledger (
+CREATE TABLE IF NOT EXISTS internal_ledger (
     internal_txn_id      TEXT PRIMARY KEY,
     transaction_date     DATE NOT NULL,
     amount                NUMERIC(10, 2) NOT NULL,
@@ -23,7 +21,7 @@ CREATE TABLE internal_ledger (
     merchant_number       TEXT NOT NULL
 );
 
-CREATE TABLE network_settlement (
+CREATE TABLE IF NOT EXISTS network_settlement (
     settlement_line_id  TEXT PRIMARY KEY,
     settlement_date      DATE NOT NULL,
     gross_amount          NUMERIC(10, 2) NOT NULL,
@@ -39,7 +37,7 @@ CREATE TABLE network_settlement (
 );
 
 -- Eval-only. Not part of the application schema the agent queries.
-CREATE TABLE ground_truth (
+CREATE TABLE IF NOT EXISTS ground_truth (
     internal_txn_id       TEXT,
     settlement_line_ids   TEXT,
     discrepancy_type      TEXT NOT NULL,
@@ -49,5 +47,5 @@ CREATE TABLE ground_truth (
 -- These indexes are what make the matcher's "candidates for this account
 -- within a date window" query fast instead of a full scan -- the same
 -- role the HNSW index played for vector search in Project 1.
-CREATE INDEX idx_ledger_account_date ON internal_ledger (account_last4, transaction_date);
-CREATE INDEX idx_settlement_account_date ON network_settlement (account_last4, settlement_date);
+CREATE INDEX IF NOT EXISTS idx_ledger_account_date ON internal_ledger (account_last4, transaction_date);
+CREATE INDEX IF NOT EXISTS idx_settlement_account_date ON network_settlement (account_last4, settlement_date);

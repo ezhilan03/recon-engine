@@ -6,7 +6,7 @@
 
 FROM python:3.11-slim AS builder
 
-RUN pip install --no-cache-dir uv
+RUN pip install --no-cache-dir uv==0.11.31
 
 WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
@@ -30,7 +30,7 @@ COPY pyproject.toml ./
 # data/output and data/cache are written at runtime (dataset generation,
 # investigation cache) -- COPY defaults to root ownership, which would
 # make those writes fail once running as appuser below.
-RUN mkdir -p /app/data && chown -R appuser:appuser /app
+RUN mkdir -p /app/data /app/reports && chown -R appuser:appuser /app
 
 ENV PATH="/app/.venv/bin:$PATH"
 USER appuser

@@ -21,6 +21,8 @@ import time
 from pathlib import Path
 from typing import Literal
 
+from recon_engine.agent.cache import digest, read as read_cache, write as write_cache
+
 import litellm
 from pydantic import BaseModel, Field, ValidationError
 
@@ -87,9 +89,9 @@ own settlement line. If you don't have a real SETL- id to cite, use an \
 empty list."""
 
 
-def _cache_path(internal_txn_id: str) -> Path:
-    model_tag = hashlib.md5(PROPOSER_MODEL.encode()).hexdigest()[:8]
-    return CACHE_DIR / f"{internal_txn_id}_{model_tag}.json"
+def _cache_path(internal_txn_id: str, findings: str) -> Path:
+    return CACHE_DIR / (digest([internal_txn_id, findings, PROPOSER_MODEL,
+                               OLLAMA_API_BASE, Path(__file__).read_text()]) + ".json")
 
 
 def _completion_with_backoff(**kwargs):
@@ -125,9 +127,15 @@ def _extract_json(text: str) -> dict:
 
 
 def propose_resolution(internal_txn_id: str, investigation_findings: str) -> ResolutionProposal:
-    cache_file = _cache_path(internal_txn_id)
-    if cache_file.exists():
-        return ResolutionProposal.model_validate(json.loads(cache_file.read_text()))
+    cache_file = _cache_path(internal_txn_id, investigation_findings)
+    cached = read_cache(cache_file)
+    if cached:
+        try:
+            proposal = ResolutionProposal.model_validate(cached)
+            if proposal.internal_txn_id == internal_txn_id:
+                return proposal
+        except ValidationError:
+            pass
 
     prompt_content = (
         f"An investigator produced these findings for a transaction:\n\n"
@@ -169,7 +177,7 @@ def propose_resolution(internal_txn_id: str, investigation_findings: str) -> Res
             parsed = _extract_json(raw)
             llm_output = _LLMResolutionOutput.model_validate(parsed)
             proposal = ResolutionProposal(internal_txn_id=internal_txn_id, **llm_output.model_dump())
-            cache_file.write_text(json.dumps(proposal.model_dump()))
+            write_cache(cache_file, proposal.model_dump())
             return proposal
         except (json.JSONDecodeError, ValidationError) as e:
             last_error = f"attempt {attempt + 1}: {type(e).__name__}: {e}. raw_output={raw!r}"

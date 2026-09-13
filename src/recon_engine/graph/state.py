@@ -10,7 +10,7 @@ so each can pause/resume independently -- flagging that now so it's not
 a surprise later.
 """
 
-from typing import TypedDict
+from typing import TypedDict, NotRequired
 
 
 class ExceptionCase(TypedDict):
@@ -38,6 +38,7 @@ class SettlementLineDict(TypedDict):
 
 
 class GraphState(TypedDict):
+    run_signature: NotRequired[str]
     exceptions: list[ExceptionCase]
     unclaimed_settlement: list[SettlementLineDict]
     bucket_counts: dict[str, int]

@@ -1,0 +1,38 @@
+name: Run bounded Recon demo
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Full commit SHA of an already published candidate (earlier SHA runs a rollback demo)
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: recon-demo
+  cancel-in-progress: false
+jobs:
+  demo:
+    if: github.ref == 'refs/heads/master'
+    environment: recon-demo
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      REVISION: ${{ inputs.revision }}
+      INSTANCE_ID: ${{ vars.RECON_DEMO_INSTANCE_ID }}
+      DEMO_DOCUMENT: ${{ vars.RECON_DEMO_DOCUMENT }}
+      AWS_REGION: us-east-1
+      LOG_GROUP: /portfolio/recon-portfolio
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.RECON_DEMO_OPERATOR_ROLE_ARN }}
+          aws-region: us-east-1
+      - run: python scripts/run_remote_demo.py
+      - name: Stop instance even if a previous step failed
+        if: always()
+        run: aws ec2 stop-instances --instance-ids "$INSTANCE_ID"
