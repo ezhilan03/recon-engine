@@ -1,3 +1,13 @@
+# AWS foundation and optional on-demand demo
+
+The user selected an under-$5/month on-demand demo. See
+[the concrete deployment and cost review](../../docs/cloud-demo-review.md).
+
+The foundation remains the default. enable_publisher adds scoped GitHub OIDC;
+enable_demo adds the private-by-network-policy EC2/PostgreSQL demo with stop controls.
+Both are disabled by default. Use a reviewed, pinned ARM64 demo_ami when enabling it.
+All infrastructure remains unapplied. Historical foundation verification follows.
+
 # AWS foundation, prepared but not applied
 
 This module creates private versioned S3 artifacts, an immutable ECR repository
@@ -17,9 +27,8 @@ terraform test
 AWS_PROFILE=portfolio terraform plan -var=account_id=YOUR_ACCOUNT_ID
 ```
 
-This is a foundation, not an executable cloud deployment. Compute, persistent
-PostgreSQL, scoped runtime/deployment IAM roles, scheduler, alert routing and the
-OIDC release workflow must be specified before deploying. The current local AWS
+The default is foundation-only. Optional on-demand runtime and publishing code are
+now prepared; the cloud deployment review records their verification limits. The current local AWS
 session is root; the deployment must use a scoped identity. No Terraform credentials
 are stored in configuration. Account restrictions prevent accidental cross-account use.
 
