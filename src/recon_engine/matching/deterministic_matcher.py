@@ -31,6 +31,7 @@ Run:
 import csv
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 WINDOW_DAYS = 5
@@ -116,14 +117,37 @@ def _in_window(txn_date: date, settle_date: date) -> bool:
     return 0 <= delta <= WINDOW_DAYS
 
 
-def _amounts_equal(a: float, b: float) -> bool:
-    return abs(a - b) <= AMOUNT_TOL
+def _money(value: float | Decimal) -> Decimal:
+    amount = Decimal(str(value))
+    if not amount.is_finite():
+        raise ValueError("Matching amounts must be finite")
+    return amount
+
+
+def _amounts_equal(a: float | Decimal, b: float | Decimal) -> bool:
+    return abs(_money(a) - _money(b)) <= Decimal(str(AMOUNT_TOL))
 
 
 def run_matcher(
     ledger: list[InternalRow],
     settlement: list[SettlementRow],
 ) -> list[MatchResult]:
+    """Generate candidates first, then reserve only uncontested allocations.
+
+    Ambiguous result IDs are evidence, not allocations. A settlement mentioned
+    by competing transactions is routed to review for all of them, rather than
+    allowing input order to choose a winner. Exact candidates retain precedence
+    over splits. This is a conservative baseline, not a global optimiser or a
+    cross-run database reservation system.
+    """
+    if len({t.internal_txn_id for t in ledger}) != len(ledger):
+        raise ValueError("Duplicate internal transaction IDs; deduplicate ingestion first")
+    if len({s.settlement_line_id for s in settlement}) != len(settlement):
+        raise ValueError("Duplicate settlement IDs; deduplicate ingestion first")
+    for t in ledger:
+        _money(t.amount)
+    for s in settlement:
+        _money(s.gross_amount)
     # index settlement lines by account_last4 for fast candidate lookup
     by_account: dict[str, list[SettlementRow]] = {}
     for s in settlement:
@@ -146,23 +170,32 @@ def run_matcher(
             continue
 
         # Step 3: two-line split that sums to the amount
-        found_split = False
+        split_pairs = []
         for i in range(len(window_candidates)):
             for j in range(i + 1, len(window_candidates)):
-                pair_sum = window_candidates[i].gross_amount + window_candidates[j].gross_amount
+                left, right = window_candidates[i], window_candidates[j]
+                if abs((left.settlement_date - right.settlement_date).days) > 1:
+                    continue
+                pair_sum = _money(left.gross_amount) + _money(right.gross_amount)
                 if _amounts_equal(pair_sum, txn.amount):
-                    results.append(MatchResult(
-                        txn.internal_txn_id, "split_two",
-                        [window_candidates[i].settlement_line_id, window_candidates[j].settlement_line_id],
-                    ))
-                    found_split = True
-                    break
-            if found_split:
-                break
-        if found_split:
+                    split_pairs.append((left.settlement_line_id, right.settlement_line_id))
+        if split_pairs:
+            results.append(MatchResult(
+                txn.internal_txn_id,
+                "split_two" if len(split_pairs) == 1 else "ambiguous",
+                sorted({sid for pair in split_pairs for sid in pair}),
+            ))
             continue
 
         # Step 4: nothing worked
         results.append(MatchResult(txn.internal_txn_id, "unresolved", []))
 
+    claimants: dict[str, set[str]] = {}
+    for result in results:
+        result.matched_settlement_ids.sort()
+        for sid in result.matched_settlement_ids:
+            claimants.setdefault(sid, set()).add(result.internal_txn_id)
+    for result in results:
+        if any(len(claimants[sid]) > 1 for sid in result.matched_settlement_ids):
+            result.match_type = "ambiguous"
     return results

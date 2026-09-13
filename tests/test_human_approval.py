@@ -101,8 +101,7 @@ def main() -> None:
         print("PASS: resume correctly applied the human decision to the paused case,")
         print("      and the auto-approved case's earlier decision was preserved.")
     else:
-        print("FAIL: expected the high-value case to trigger an interrupt, but none occurred.")
-        print("Final state:", result)
+        raise AssertionError("Expected the high-value case to trigger an interrupt")
 
 
 if __name__ == "__main__":

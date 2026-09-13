@@ -1,5 +1,19 @@
 # Financial Reconciliation Engine
 
+## Local reliability milestone (in progress)
+
+The new batch path imports immutable source files atomically, treats identical
+replays as no-ops, and commits only disjoint deterministic allocations. Conflicting
+source corrections fail without overwriting prior data. Competing matches remain
+a review queue. PostgreSQL constraints preserve ownership across runs; an explicit
+balanced allocation group can represent a many-to-one batch.
+
+Start with [the local operations runbook](docs/local-operations.md). It includes
+the test commands, failure/retry exercise, metrics and remaining release gates.
+This is a local milestone, not a verified cloud deployment. The existing agent
+pipeline below remains an experimental investigation path: speculative batch
+proposals cannot be committed without a validated complete allocation group.
+
 An agentic reconciliation pipeline for ACH/card settlement — matches an
 internal transaction ledger against an external network settlement file
 that shares **no common transaction identifier**, using deterministic

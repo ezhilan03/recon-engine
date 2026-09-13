@@ -13,3 +13,10 @@ wheels/
 
 # Investigation/proposal cache -- regenerated per dataset, not meant to be versioned
 data/cache/
+
+# Local Terraform state and plans
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars

@@ -10,6 +10,7 @@ touches it, same principle as the matcher itself.
 """
 
 from datetime import date, timedelta
+from decimal import Decimal
 from itertools import combinations
 
 from recon_engine.graph.state import ExceptionCase, GraphState, SettlementLineDict
@@ -157,40 +158,45 @@ def resolve_batches(state: GraphState) -> GraphState:
     if not batch_candidates:
         return state
 
-    resolved_txn_ids: set[str] = set()
-
-    for settlement_line in state["unclaimed_settlement"]:
-        target = settlement_line["gross_amount"]
-        settle_date = date.fromisoformat(settlement_line["settlement_date"])
-
-        # prefilter: only cases whose transaction_date is within the wide
-        # window of this settlement line's date, and not already claimed
-        eligible = [
-            c for c in batch_candidates
-            if c["internal_txn_id"] not in resolved_txn_ids
-            and 0 <= (settle_date - date.fromisoformat(c["transaction_date"])).days <= WIDE_WINDOW_DAYS
-        ]
-
-        found = False
+    # Enumerate candidates before claiming anything. Amount-only candidates are
+    # proposals for explicit review, never operational resolutions.
+    candidates = []
+    searched = 0
+    for line in sorted(state["unclaimed_settlement"], key=lambda s: s["settlement_line_id"]):
+        eligible = [c for c in batch_candidates
+                    if 0 <= (date.fromisoformat(line["settlement_date"]) -
+                             date.fromisoformat(c["transaction_date"])).days <= WIDE_WINDOW_DAYS]
         for size in range(2, min(MAX_BATCH_SIZE, len(eligible)) + 1):
             for combo in combinations(eligible, size):
-                if abs(sum(c["amount"] for c in combo) - target) <= AMOUNT_TOL:
-                    for c in combo:
-                        c["classification"] = "batched_settlement_resolved"
-                        c["evidence"] = {
-                            "settlement_line_id": settlement_line["settlement_line_id"],
-                            "batch_members": [m["internal_txn_id"] for m in combo],
-                        }
-                        resolved_txn_ids.add(c["internal_txn_id"])
-                    found = True
-                    break
-            if found:
-                break
-
-    # anything still unresolved after the search: don't assert what it is
+                searched += 1
+                if searched > 10000:
+                    for c in batch_candidates:
+                        c["classification"] = "batch_search_limit_review"
+                    return state
+                if abs(sum(Decimal(str(c["amount"])) for c in combo) -
+                       Decimal(str(line["gross_amount"]))) <= Decimal("0.01"):
+                    candidates.append((sorted(c["internal_txn_id"] for c in combo), line))
     for c in batch_candidates:
-        if c["internal_txn_id"] not in resolved_txn_ids:
-            c["classification"] = "no_batch_match_found"
+        c["classification"] = "no_batch_match_found"
+    for members, line in candidates:
+        competing = [g for g, other in candidates
+                     if set(g) & set(members) or other["settlement_line_id"] == line["settlement_line_id"]]
+        if len(competing) != 1:
+            for c in batch_candidates:
+                if c["internal_txn_id"] in members:
+                    c["classification"] = "ambiguous_batch_review"
+            continue
+        group = {"transaction_ids": members, "settlement_ids": [line["settlement_line_id"]]}
+        for c in batch_candidates:
+            if c["internal_txn_id"] in members:
+                c["classification"] = "batch_pending_review"
+                c["evidence"]["allocation_group"] = group
+                c["evidence"]["resolution_proposal"] = {
+                    "internal_txn_id": c["internal_txn_id"], "resolution_type": "confirmed_batch",
+                    "matched_settlement_line_ids": group["settlement_ids"], "confidence": 0.5,
+                    "reasoning": "Complete group balances by amount and date; business identity requires human verification.",
+                    "requires_human_approval": True,
+                }
 
     return state
 
@@ -296,12 +302,21 @@ def human_approval(state: GraphState) -> GraphState:
     need yet, so this node stays sync even though others aren't."""
     from langgraph.types import interrupt
 
+    reviewed_groups = {}
     for case in state["exceptions"]:
         proposal = case["evidence"].get("resolution_proposal")
         if not proposal:
             continue
 
-        needs_approval = proposal["requires_human_approval"] or case["amount"] >= HIGH_VALUE_THRESHOLD
+        group = case["evidence"].get("allocation_group")
+        group_key = (tuple(group["transaction_ids"]), tuple(group["settlement_ids"])) if group else None
+        if group_key in reviewed_groups:
+            case["evidence"]["human_decision"] = reviewed_groups[group_key]
+            continue
+        low_confidence = proposal["confidence"] < 0.85
+        needs_approval = (proposal["requires_human_approval"] or low_confidence
+                          or case["amount"] >= HIGH_VALUE_THRESHOLD
+                          or proposal["resolution_type"] == "confirmed_batch")
         if not needs_approval:
             case["evidence"]["human_decision"] = "auto_approved"
             continue
@@ -309,15 +324,25 @@ def human_approval(state: GraphState) -> GraphState:
         decision = interrupt({
             "internal_txn_id": case["internal_txn_id"],
             "amount": case["amount"],
+            "allocation_group": group,
+            "group_members": [
+                {k: member[k] for k in ("internal_txn_id", "amount", "transaction_date", "account_last4")}
+                for member in state["exceptions"]
+                if group and member["internal_txn_id"] in group["transaction_ids"]
+            ],
             "resolution_type": proposal["resolution_type"],
             "matched_settlement_line_ids": proposal["matched_settlement_line_ids"],
             "confidence": proposal["confidence"],
             "reasoning": proposal["reasoning"],
             "flagged_reason": (
-                "low_confidence" if proposal["requires_human_approval"]
+                "low_confidence" if proposal["requires_human_approval"] or low_confidence
                 else "high_value_threshold"
             ),
         })
+        if decision not in ("approved", "rejected"):
+            raise ValueError("Human decision must be approved or rejected")
         case["evidence"]["human_decision"] = decision
+        if group_key:
+            reviewed_groups[group_key] = decision
 
     return state

@@ -10,7 +10,7 @@ without touching the tool-calling loop itself, only the MCP-tool-schema
 conversion (OpenAI-style function-calling format works across providers
 via litellm; Anthropic's raw SDK format does not).
 
-Results are cached to disk by internal_txn_id. Every debugging re-run
+Results are cached by source snapshot, case, model and implementation content. Every debugging re-run
 during development was re-paying for investigation work that had already
 succeeded before failing on a later, unrelated bug -- this cache means a
 re-run only pays (in time or quota) for cases it hasn't seen before.
@@ -24,6 +24,7 @@ from pathlib import Path
 
 import litellm
 from mcp import Client
+from recon_engine.agent.cache import digest, source_fingerprint, read as read_cache, write as write_cache
 
 from recon_engine.mcp_server.server import mcp
 
@@ -54,11 +55,11 @@ CACHE_DIR = Path(__file__).resolve().parents[3] / "data" / "cache" / "investigat
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _cache_path(internal_txn_id: str) -> Path:
-    # hash the model name into the cache key so switching providers doesn't
-    # silently serve stale findings from a different model
-    model_tag = hashlib.md5(INVESTIGATOR_MODEL.encode()).hexdigest()[:8]
-    return CACHE_DIR / f"{internal_txn_id}_{model_tag}.json"
+def _cache_path(case: dict, source: str) -> Path:
+    implementation = [Path(__file__).read_text(),
+                      (Path(__file__).parents[1] / "mcp_server/server.py").read_text()]
+    return CACHE_DIR / (digest([case, source, INVESTIGATOR_MODEL, OLLAMA_API_BASE,
+                               implementation]) + ".json")
 
 
 def _mcp_tool_to_openai_schema(tool) -> dict:
@@ -164,16 +165,11 @@ async def investigate_case(case: dict) -> str:
     model's free-text investigation summary. Cached to disk by
     internal_txn_id + model, so re-running the pipeline doesn't re-pay
     for cases already investigated."""
-    cache_file = _cache_path(case["internal_txn_id"])
-    if cache_file.exists():
-        cached_data = json.loads(cache_file.read_text())
-        cached = cached_data.get("findings")
-        # tool_calls_made wasn't tracked before this fix -- .get() defaults
-        # to 0 for any pre-existing cache entry, which correctly forces a
-        # retry rather than trusting old, potentially-corrupted findings
-        # (unfinished chain-of-thought that never made a real tool call).
-        if cached and cached_data.get("tool_calls_made", 0) > 0:
-            return cached
+    source = source_fingerprint()
+    cache_file = _cache_path(case, source)
+    cached_data = read_cache(cache_file)
+    if isinstance(cached_data.get("findings"), str) and cached_data.get("tool_calls_made", 0) > 0:
+        return cached_data["findings"]
 
     async with Client(mcp) as mcp_client:
         tool_list = await mcp_client.list_tools()
@@ -280,5 +276,7 @@ async def investigate_case(case: dict) -> str:
                 f"(tool_calls_made={tool_calls_made})."
             )
 
-    cache_file.write_text(json.dumps({"findings": findings, "tool_calls_made": tool_calls_made}))
+    if source_fingerprint() != source:
+        raise ValueError("Source data changed during investigation; retry with a new snapshot")
+    write_cache(cache_file, {"findings": findings, "tool_calls_made": tool_calls_made})
     return findings

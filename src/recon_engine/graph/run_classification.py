@@ -48,6 +48,8 @@ def load_ledger_and_settlement():
 def load_ground_truth_by_type() -> dict[str, str]:
     """internal_txn_id -> discrepancy_type, for scoring only."""
     gt = {}
+    if not (DATA_DIR / "ground_truth.csv").exists():
+        return gt
     with (DATA_DIR / "ground_truth.csv").open() as f:
         for row in csv.DictReader(f):
             if row["internal_txn_id"]:
@@ -56,6 +58,15 @@ def load_ground_truth_by_type() -> dict[str, str]:
 
 
 async def main() -> None:
+    from recon_engine.agent.cache import digest, source_fingerprint
+    from recon_engine.graph.runtime import session, start_or_resume
+    from recon_engine.agent.investigator import INVESTIGATOR_MODEL
+    from recon_engine.agent.proposer import PROPOSER_MODEL
+    dsn = os.environ.get("DATABASE_URL")
+    run_id = os.environ.get("RECON_RUN_ID")
+    if not dsn or not run_id:
+        raise ValueError("DATABASE_URL and a stable RECON_RUN_ID are required for restart-safe operation")
+    source = source_fingerprint()
     ledger, settlement = load_ledger_and_settlement()
     print(f"Loaded {len(ledger)} internal, {len(settlement)} settlement rows.\n")
 
@@ -63,26 +74,39 @@ async def main() -> None:
     n_exceptions = len(initial_state["exceptions"])
     print(f"Exception queue after deterministic matching: {n_exceptions} cases\n")
 
-    app = build_graph()
-    config = {"configurable": {"thread_id": str(uuid.uuid4())}}
+    implementation = [(str(p.relative_to(Path(__file__).parents[1])), p.read_text())
+                      for p in sorted(Path(__file__).parents[1].rglob("*.py"))]
+    signature = digest([initial_state, source, implementation, INVESTIGATOR_MODEL,
+                        PROPOSER_MODEL, os.environ.get("INVESTIGATE_LIMIT", "0"),
+                        os.environ.get("OLLAMA_API_BASE", "http://localhost:11434")])
+    print(f"Run ID: {run_id}. Restart with the same RECON_RUN_ID to resume.")
+    async with session(dsn, run_id) as (app, config):
+        result = await start_or_resume(app, config, initial_state, signature)
+        while "__interrupt__" in result:
+            payload = result["__interrupt__"][0].value
+            print("\n" + "=" * 60)
+            print("HUMAN APPROVAL NEEDED")
+            print(f"  transaction:      {payload['internal_txn_id']}")
+            print(f"  amount:           ${payload['amount']:.2f}")
+            print(f"  proposed:         {payload['resolution_type']}")
+            print(f"  settlement lines: {payload['matched_settlement_line_ids']}")
+            print(f"  complete group:  {payload.get('allocation_group')}")
+            for member in payload.get("group_members", []):
+                print(f"    member: {member}")
+            print(f"  confidence:       {payload['confidence']:.2f}")
+            print(f"  reasoning:        {payload['reasoning']}")
+            print(f"  flagged because:  {payload['flagged_reason']}")
+            print("=" * 60)
+            decision = input("Approve this resolution? [y/n]: ").strip().lower()
+            while decision not in ("y", "n"):
+                decision = input("Enter y or n: ").strip().lower()
+            decision_value = "approved" if decision == "y" else "rejected"
+            if source_fingerprint() != source:
+                raise ValueError("Source changed while awaiting approval; start a new run")
+            result = await app.ainvoke(Command(resume=decision_value), config=config)
 
-    result = await app.ainvoke(initial_state, config=config)
-    while "__interrupt__" in result:
-        payload = result["__interrupt__"][0].value
-        print("\n" + "=" * 60)
-        print("HUMAN APPROVAL NEEDED")
-        print(f"  transaction:      {payload['internal_txn_id']}")
-        print(f"  amount:           ${payload['amount']:.2f}")
-        print(f"  proposed:         {payload['resolution_type']}")
-        print(f"  settlement lines: {payload['matched_settlement_line_ids']}")
-        print(f"  confidence:       {payload['confidence']:.2f}")
-        print(f"  reasoning:        {payload['reasoning']}")
-        print(f"  flagged because:  {payload['flagged_reason']}")
-        print("=" * 60)
-        decision = input("Approve this resolution? [y/n]: ").strip().lower()
-        decision_value = "approved" if decision == "y" else "rejected"
-        result = await app.ainvoke(Command(resume=decision_value), config=config)
-
+    if source_fingerprint() != source:
+        raise ValueError("Source changed during the run; no resolutions committed")
     final_state = result
 
     print("Classification buckets after rule-based pass + batch resolution:")
@@ -94,7 +118,7 @@ async def main() -> None:
         + final_state["bucket_counts"].get("duplicate_needs_review", 0) \
         + final_state["bucket_counts"].get("no_batch_match_found", 0)
     print(f"\nGenuinely left for the agent layer: {still_needs_llm} / {n_exceptions} "
-          f"({still_needs_llm/n_exceptions:.1%} of the original exception queue)")
+          f"({(still_needs_llm/n_exceptions if n_exceptions else 0):.1%} of the original exception queue)")
 
     # score correctness against ground truth, since we can here
     gt_by_type = load_ground_truth_by_type()
@@ -163,13 +187,14 @@ async def main() -> None:
         avg_confidence = sum(c["evidence"]["resolution_proposal"]["confidence"] for c in proposals) / len(proposals)
         print(f"  average confidence: {avg_confidence:.2f}")
 
-    if proposals and os.environ.get("DATABASE_URL"):
+    if os.environ.get("DATABASE_URL"):
         from recon_engine.agent.investigator import INVESTIGATOR_MODEL
         from recon_engine.agent.proposer import PROPOSER_MODEL
         from recon_engine.db.save_resolutions import new_run_id, save_run
 
-        run_id = new_run_id()
-        n_saved = save_run(run_id, INVESTIGATOR_MODEL, PROPOSER_MODEL, final_state["exceptions"])
+        from recon_engine.matching.deterministic_matcher import run_matcher
+        n_saved = save_run(run_id, INVESTIGATOR_MODEL, PROPOSER_MODEL,
+                           final_state["exceptions"], matches=run_matcher(ledger, settlement))
         print(f"\nSaved {n_saved} resolutions to agent_resolutions (run_id={run_id})")
         print(f"Score this run with:")
         print(f"  uv run python -m recon_engine.evaluation.evaluate_agent_resolutions {run_id}")
