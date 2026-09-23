@@ -1,6 +1,6 @@
 # Financial Reconciliation Engine
 
-## Local reliability milestone (in progress)
+## Verified AWS batch milestone — September 2026
 
 The new batch path imports immutable source files atomically, treats identical
 replays as no-ops, and commits only disjoint deterministic allocations. Conflicting
@@ -10,9 +10,9 @@ balanced allocation group can represent a many-to-one batch.
 
 Start with [the local operations runbook](docs/local-operations.md). It includes
 the test commands, failure/retry exercise, metrics and remaining release gates.
-This is a local milestone, not a verified cloud deployment. The existing agent
-pipeline below remains an experimental investigation path: speculative batch
-proposals cannot be committed without a validated complete allocation group.
+The AWS batch milestone is verified at [commit 2d5f2ee](https://github.com/ezhilan03/recon-engine/tree/2d5f2eecd8d4096a6753d22217a6c0c4e4a6cb48) and [successful cloud run](https://github.com/ezhilan03/recon-engine/actions/runs/34785949568). The synthetic batch processed 500 transactions against 531 settlement rows: 383 matched (342 exact and 41 split), with 117 retained for review. Backup restoration and duplicate-safe replay were verified. See the [release case study](https://github.com/ezhilan03/portfolio/tree/main/docs/projects/recon-engine) for the evidence and limits. The demo is on demand, not an always-on production service; no version tag is claimed.
+
+The existing agent pipeline below remains an experimental investigation path: speculative batch proposals cannot be committed without a validated complete allocation group.
 
 An agentic reconciliation pipeline for ACH/card settlement — matches an
 internal transaction ledger against an external network settlement file
